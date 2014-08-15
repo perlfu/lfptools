@@ -2,6 +2,7 @@
 #define _LFPSPLITTER_H_
 
 typedef enum {
+    LFP_UNKNOWN,
     LFP_RAW_IMAGE,
     LFP_JSON,
     LFP_DEPTH_LUT,

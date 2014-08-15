@@ -152,19 +152,20 @@ static char *depth_string(const char *data, int *datalen, int len)
 
 static char *converted_image(const unsigned char *data, int *datalen, int len)
 {
-    int filelen = 4*len/3;
+    int filelen = 8*len/5;
     const unsigned char *ptr = data;
     unsigned short *image = (unsigned short*)malloc(filelen*sizeof(short));
     unsigned short *start = image;
     
     if (!image) return NULL;
-    // Turn the 12 bits per pixel packed array into 16 bits per pixel
+    // Turn the 10 bits per pixel packed array into 16 bits per pixel
     // to make it easier to import into other libraries
     while (ptr < data+len) {
-        *image++ = (*ptr << 8) | (*(ptr+1) & 0xF0);
-        *image++ = ((*(ptr+1) & 0x0F) << 12) | (*(ptr+2) << 4);
-        
-        ptr += 3;
+        *image++ = ((*(ptr+0) & 0xFF) << 2) | ((*(ptr+1) & 0xC0) >> 6);
+        *image++ = ((*(ptr+1) & 0x3F) << 4) | ((*(ptr+2) & 0xF0) >> 4);
+        *image++ = ((*(ptr+2) & 0x0F) << 6) | ((*(ptr+3) & 0xFC) >> 2);
+        *image++ = ((*(ptr+3) & 0x03) << 8) | ((*(ptr+4) & 0xFF) >> 2);
+        ptr += 5;
     }
     
     *datalen = filelen;
@@ -194,7 +195,8 @@ static int save_data(const char *data, int len, const char *filename)
 // Try to figure out if the data represents an image, json, raw data, etc
 static void lfp_identify_section(lfp_file_p lfp, lfp_section_p section)
 {
-    char jpeg[10] = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46};
+    const char jpeg_a[5] = {0xFF, 0xD8, 0xFF, 0xE0, 0x00};
+    const char jpeg_b[5] = {0xFF, 0xD8, 0xFF, 0xE1, 0x00};
     char *ptr = NULL;
     int quotecount = 0;
     section->name = (char*)malloc(STRING_LENGTH);
@@ -225,8 +227,16 @@ static void lfp_identify_section(lfp_file_p lfp, lfp_section_p section)
     }
     
     // Check for the magic bytes to see if its a jpg
-    if ((section->len > sizeof(jpeg)) && 
-        (memcmp(section->data, jpeg, sizeof(jpeg)) == 0)) {
+    if ((section->len > sizeof(jpeg_a)) && 
+        (memcmp(section->data, jpeg_a, sizeof(jpeg_a)) == 0)) {
+        section->type = LFP_JPEG;
+        strcpy(section->name, "image");
+        return;
+    }
+    
+    // Check for the magic bytes to see if its a jpg
+    if ((section->len > sizeof(jpeg_b)) && 
+        (memcmp(section->data, jpeg_b, sizeof(jpeg_b)) == 0)) {
         section->type = LFP_JPEG;
         strcpy(section->name, "image");
         return;
@@ -238,9 +248,17 @@ static void lfp_identify_section(lfp_file_p lfp, lfp_section_p section)
         return;
     }
     
-    // Assume anything else that isn't called imageRef is plain text json
-    if (strcmp(section->name, "imageRef"))
+    // anything Metadata is JSON 
+    if (strstr(section->name, "Metadata")) {
         section->type = LFP_JSON;
+        return;
+    }
+    
+    // imageRef is a raw image
+    if ((strcmp(section->name, "imageRef") == 0) && section->len > (1024 * 1024)) {
+        section->type = LFP_RAW_IMAGE;
+        return;
+    }
 }
 
 static void lfp_parse_sections(lfp_file_p lfp)
@@ -252,21 +270,41 @@ static void lfp_parse_sections(lfp_file_p lfp)
     ptr += MAGIC_LENGTH+sizeof(uint32_t);
     len -= MAGIC_LENGTH+sizeof(uint32_t);
     
-    // Assume the first section is always the table of contents
-    lfp->table = parse_section(&ptr, &len);
-    lfp->table->type = LFP_JSON;
-    lfp->table->name = "table";
-    
+    // Locate all the sections
     lfp_section_p cur_section = NULL;
     while (len > 0) {
         lfp_section_p new_section = parse_section(&ptr, &len);
         if (!new_section) break;
+       
+        new_section->type = LFP_UNKNOWN;
         
-        lfp_identify_section(lfp, new_section);
-        
-        if (!lfp->sections) lfp->sections = new_section;
-        else if (cur_section) cur_section->next = new_section;
+        if (cur_section)
+            cur_section->next = new_section;
+        else
+            lfp->sections = new_section;
+
         cur_section = new_section;
+    }
+    
+    // The table of contents is either the last or first section
+    if (lfp->sections) {
+        if (lfp->sections->data[0] == '{') {
+            // probably JSON: so first section
+            lfp->table = lfp->sections; 
+        } else {
+            // assume last section
+            lfp->table = cur_section;
+        }
+        lfp->table->type = LFP_JSON;
+        lfp->table->name = strdup("table");
+    }
+
+    // Now we have the table of contents identify the other sections
+    cur_section = lfp->sections;
+    while (cur_section) {
+        if (cur_section->type == LFP_UNKNOWN)
+            lfp_identify_section(lfp, cur_section);
+        cur_section = cur_section->next;
     }
 }
 
@@ -274,17 +312,19 @@ static void lfp_save_sections(lfp_file_p lfp)
 {
     char name[STRING_LENGTH];
     lfp_section_p section = lfp->sections;
-    int jpeg = 0, raw = 0, text = 0, image_block = 0, lut = 0;
+    int jpeg = 0, raw = 0, text = 0, image_block = 0, lut = 0, data = 0;
     char *buf;
     int buflen = 0;
     
-    // Save the plaintext json metadata
-    snprintf(name, STRING_LENGTH, "%s_%s.json", lfp->filename, lfp->table->name);
-    if (save_data(lfp->table->data, lfp->table->len, name))
-        printf("Saved %s\n", name);
-    
     while (section != NULL) {
+        fprintf (stderr, "%d %d\n", section->type, section->len);
         switch (section->type) {
+            case LFP_UNKNOWN:
+                snprintf(name, STRING_LENGTH, "%s_%s%d.data", lfp->filename, section->name, data++);
+                if (save_data(section->data, section->len, name))
+                    printf("Saved %s\n", name);
+                break;
+
             case LFP_RAW_IMAGE:
                 buf = converted_image((unsigned char *)section->data, &buflen, section->len);
                 if (buf) {
