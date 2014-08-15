@@ -249,7 +249,7 @@ static void lfp_identify_section(lfp_file_p lfp, lfp_section_p section)
     }
     
     // anything Metadata is JSON 
-    if (strstr(section->name, "Metadata")) {
+    if (strcasestr(section->name, "metadataRef")) {
         section->type = LFP_JSON;
         return;
     }
