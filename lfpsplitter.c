@@ -161,10 +161,10 @@ static char *converted_image(const unsigned char *data, int *datalen, int len)
     // Turn the 10 bits per pixel packed array into 16 bits per pixel
     // to make it easier to import into other libraries
     while (ptr < data+len) {
-        *image++ = ((*(ptr+0) & 0xFF) << 2) | ((*(ptr+1) & 0xC0) >> 6);
-        *image++ = ((*(ptr+1) & 0x3F) << 4) | ((*(ptr+2) & 0xF0) >> 4);
-        *image++ = ((*(ptr+2) & 0x0F) << 6) | ((*(ptr+3) & 0xFC) >> 2);
-        *image++ = ((*(ptr+3) & 0x03) << 8) | ((*(ptr+4) & 0xFF) >> 2);
+        *image++ = (*(ptr+0) << 2) | ((*(ptr+4) & 0x03) >> 0);
+        *image++ = (*(ptr+1) << 2) | ((*(ptr+4) & 0x0C) >> 2);
+        *image++ = (*(ptr+2) << 2) | ((*(ptr+4) & 0x30) >> 4);
+        *image++ = (*(ptr+3) << 2) | ((*(ptr+4) & 0xC0) >> 6);
         ptr += 5;
     }
     
@@ -326,12 +326,17 @@ static void lfp_save_sections(lfp_file_p lfp)
                 break;
 
             case LFP_RAW_IMAGE:
-                buf = converted_image((unsigned char *)section->data, &buflen, section->len);
-                if (buf) {
-                    snprintf(name, STRING_LENGTH, "%s_%s%d.raw", lfp->filename, section->name, raw++);
-                    if (save_data(buf, buflen, name))
+                snprintf(name, STRING_LENGTH, "%s_%s%d.raw", lfp->filename, section->name, raw++);
+                if (0) {
+                    buf = converted_image((unsigned char *)section->data, &buflen, section->len);
+                    if (buf) {
+                        if (save_data(buf, buflen, name))
+                            printf("Saved %s (converted)\n", name);
+                        free(buf);
+                    }
+                } else {
+                    if (save_data(section->data, section->len, name))
                         printf("Saved %s\n", name);
-                    free(buf);
                 }
                 break;
             
