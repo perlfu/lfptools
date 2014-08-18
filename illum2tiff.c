@@ -6,80 +6,6 @@
 
 #include <tiffio.h>
 
-#if 0
-#include <png.h>
-
-static void png_write_data(png_structp png_ptr, 
-            png_bytep data, png_size_t length)
-{
-	FILE *fh = (FILE *) png_get_io_ptr(png_ptr);
-	if (fh)
-        fwrite(data, 1, length, fh);
-}
-
-static void write_rgb_png(const char *fn, 
-            const int w, const int h,
-            const uint16_t *dst)
-{
-	png_structp png_ptr = NULL;
-	png_infop info_ptr = NULL;
-	png_uint_16 **row_pointers = NULL;
-    FILE *fh = fopen(fn, "wb");;
-	int ok = 1;
-
-	row_pointers = (png_uint_16 **) malloc(h * sizeof(png_uint_16*));
-	if (!row_pointers)
-		ok = 0;
-	
-	png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-	if (!png_ptr) {
-		ok = 0;
-	} else {
-		info_ptr = png_create_info_struct(png_ptr);
-		if (!info_ptr)
-			ok = 0;
-	}
-
-	png_set_write_fn(png_ptr, fh, png_write_data, NULL);
-
-	if (setjmp(png_jmpbuf(png_ptr))) {
-		ok = 0;
-	}
-	
-    png_set_filter(png_ptr, 0, PNG_FILTER_NONE);
-    //png_set_compression_level(png_ptr, 1);
-    //png_set_swap(png_ptr);
-
-	if (ok) {
-        const uint16_t *p = dst;
-
-		png_set_IHDR(png_ptr, info_ptr,
-			w, h, 16, PNG_COLOR_TYPE_RGB,
-			PNG_INTERLACE_NONE, 
-            PNG_COMPRESSION_TYPE_DEFAULT,
-			PNG_FILTER_TYPE_DEFAULT);
-		
-		png_write_info(png_ptr, info_ptr);
-
-		for (int y = 0; y < h; ++y) {
-			row_pointers[y] = (png_uint_16 *) p;
-            p += w * 3;
-        }
-		
-		png_write_image(png_ptr, (png_byte **)row_pointers);
-		
-		png_write_end(png_ptr, NULL);
-	}
-
-	if (png_ptr)
-		png_destroy_write_struct(&png_ptr, &info_ptr);
-	if (row_pointers)
-		free(row_pointers);
-    if (fh)
-        fclose(fh);
-}
-#endif
-
 static void write_rgb_tiff(const char *fn, 
             const int w, const int h,
             const uint16_t *dst)
@@ -101,7 +27,6 @@ static void write_rgb_tiff(const char *fn,
     // TIFFSetField(out, TIFFTAG_COMPRESSION, COMPRESSION_LZW);
     TIFFSetField(out, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
     
-
     rps = TIFFDefaultStripSize(out, rps);
     TIFFSetField(out, TIFFTAG_ROWSPERSTRIP, rps);
     
@@ -135,107 +60,22 @@ static uint8_t *read_file(const char *fn, int *len)
     return buf;
 }
 
-#if 0
-static void write_file(const char *fn, const uint8_t *buf, const int len)
-{
-    FILE *fh;
-
-    fh = fopen(fn, "wb");
-    assert(fh != NULL);
-    fwrite(buf, 1, len, fh);
-    fclose(fh);
-}
-#endif
-
-#if 0
-static void write_rgb(const char *fn, 
-            const int w, const int h,
-            const uint16_t *r, const uint16_t *g, const uint16_t *b)
-{
-    FILE *fh;
-
-    fh = fopen(fn, "wb");
-    assert(fh != NULL);
-
-    for (int i = 0; i < (w * h); ++i) {
-        fwrite(r++, 1, sizeof(uint16_t), fh);
-        fwrite(g++, 1, sizeof(uint16_t), fh);
-        fwrite(b++, 1, sizeof(uint16_t), fh);
-    }
-    fclose(fh);
-}
-
-typedef struct _raw_grp_t {
-    uint16_t r;
-    uint16_t gr;
-    uint16_t gb;
-    uint16_t b;
-} raw_grp_t;
-
-static inline uint16_t rv10(uint16_t v)
-{
-    return  ((v & 0x001) << 9)
-        |   ((v & 0x002) << 7)
-        |   ((v & 0x004) << 5)
-        |   ((v & 0x008) << 3)
-        |   ((v & 0x010) << 1)
-        |   ((v & 0x020) >> 1)
-        |   ((v & 0x040) >> 3)
-        |   ((v & 0x080) >> 5)
-        |   ((v & 0x100) >> 7)
-        |   ((v & 0x200) >> 9); 
-}
-#endif
-
 static uint16_t *expand_10_to_16(const uint8_t *buf, const int len)
 {
     const uint8_t *ptr = buf;
     const int filelen = (len * 8) / 10;
     uint16_t *image = (uint16_t *) malloc(filelen * sizeof(uint16_t));
     uint16_t *result = image;
-    double sv[8] = {    0.0, 0.0, 0.0, 0.0,
-                        0.0, 0.0, 0.0, 0.0  };
-    double count = 0.0;
-    int phase = 0;
 
     assert(image != NULL);
 
     while (ptr < (buf+len)) {
-        uint16_t v0, v1, v2, v3;
-        
-        v0 = (*(ptr+0) << 2) | ((*(ptr+4) & 0x03) >> 0);
-        v1 = (*(ptr+1) << 2) | ((*(ptr+4) & 0x0C) >> 2);
-        v2 = (*(ptr+2) << 2) | ((*(ptr+4) & 0x30) >> 4);
-        v3 = (*(ptr+3) << 2) | ((*(ptr+4) & 0xC0) >> 6);
-
-        #if 0
-        fprintf (stderr, "%02x %02x %02x %02x %02x -> %03x %03x %03x %03x\n",
-            *(ptr + 0),
-            *(ptr + 1),
-            *(ptr + 2),
-            *(ptr + 3),
-            *(ptr + 4),
-            v0, v1, v2, v3);
-        #endif
+        *(image++) = (*(ptr+0) << 2) | ((*(ptr+4) & 0x03) >> 0);
+        *(image++) = (*(ptr+1) << 2) | ((*(ptr+4) & 0x0C) >> 2);
+        *(image++) = (*(ptr+2) << 2) | ((*(ptr+4) & 0x30) >> 4);
+        *(image++) = (*(ptr+3) << 2) | ((*(ptr+4) & 0xC0) >> 6);
 
         ptr += 5;
-        
-        *(image++) = v0;
-        *(image++) = v1;
-        *(image++) = v2;
-        *(image++) = v3;
-
-        sv[phase*4 + 0] += v0;
-        sv[phase*4 + 1] += v1;
-        sv[phase*4 + 2] += v2;
-        sv[phase*4 + 3] += v3;
-        count += 1.0;
-
-        phase = (phase + 1) & 0x1;
-    }
-
-    for (int i = 0; i < 8; ++i) {
-        fprintf (stderr, "sv[%d] = %.1f\n", i, sv[i] / (count / 8.0));
     }
 
     return result;
@@ -287,13 +127,6 @@ static void compute_rgb(const int w, const int h,
         
         ptr += 3;
         for (int col = 1; col < (w - 1); col += 1) {
-            #if 0
-            uint16_t pp = get_pixel(buf, w, h, col, row) << 6;
-            *(ptr++) = pp;
-            *(ptr++) = pp;
-            *(ptr++) = pp;
-            #endif
-            
             const int pp = ((py << 1) + px) << 2;
             uint16_t r = 0, g = 0, b = 0;
             for (int i = 0; i < 4; ++i) {
@@ -308,7 +141,6 @@ static void compute_rgb(const int w, const int h,
                             col + off_b[p][0],
                             row + off_b[p][1]);
             }
-            //fprintf (stderr, "%d,%d = %d,%d,%d\n", col, row, r, g, b);
             *(ptr++) = r << 4;
             *(ptr++) = g << 4;
             *(ptr++) = b << 4;
